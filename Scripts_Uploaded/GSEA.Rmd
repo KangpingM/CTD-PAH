@@ -1,0 +1,48 @@
+# Prerequisites
+```{r}
+library(dplyr)
+library(org.Hs.eg.db)
+library(clusterProfiler)
+library(pathview)
+library(enrichplot)
+```
+
+
+```{r}
+# Data preparation
+GSEAin_CTDPAHvIPAH <- DEG_CTDPAHvIPAH[,c(1,2)]
+GSEAin_CTDPAHvHC <- DEG_CTDPAHvHC[,c(1,2)]
+GSEAin_IPAHvHC <- DEG_IPAHvHC[,c(1,2)]
+
+
+```
+
+# GSEA using SYMBOL
+```{r}
+colnames(GSEAin_CTDPAHvHC)[1] <- "SYMBOL"
+GSEAin <- GSEAin_CTDPAHvHC$logFC
+names(GSEAin) <- GSEAin_CTDPAHvHC$SYMBOL
+
+# GSEA analysis
+h_symbol_gmt <- read.gmt("h.all.v7.5.1.symbols.gmt")
+gsea <- GSEA(GSEAin, TERM2GENE = h_symbol_gmt)
+gseaplot2(gsea,1)
+
+gse_GO <- gseGO(
+  geneList = geneList,
+  ont = "BP",
+  OrgDb = "org.Hs.eg.db",
+  keyType = "ENTREZID",
+  pvalueCutoff = 0.05,
+  pAdjustMethod = "BH"
+)
+
+gse_KEGG <- gseKEGG(
+  geneList = GSEAin,
+  organism = "hsa",
+  pvalueCutoff = 2,
+  keyType = "SYMBOL",
+  pAdjustMethod = "BH"
+)
+```
+

@@ -1,0 +1,184 @@
+# Prerequisites
+
+```{r}
+library(dplyr)
+library(RColorBrewer)
+library(clusterProfiler)
+library(GEOquery)
+```
+
+# Data preparation
+
+```{r}
+## Parameters
+GEO_accession = "GSE48149"
+wd = "/Users/kangpinghuang/Library/Mobile Documents/com~apple~CloudDocs/Core/Research/Rheumatology/CTD-PAH/Data/GSE117261_RAW"
+meta_matrix <- ""
+```
+
+## Coordinate or conditions input
+
+```{r}
+ctd_pah <- c(7,15,21,24,72)
+ipah <- c(1,2,3,4,6,8,9,11,16,18,23,29,33,37,39,40,41,42,43,47,50,60,61,62,63,70,71,74,77,79,82)
+hc <- c(17,19,20,22,25,26,27,28,31,32,34,35,36,52,53,56,57,58,59,65,66,67,68,80,81)
+
+```
+
+## Metadata
+
+```{r}
+
+gset <- getGEO(GEO_accession,getGPL = F,destdir = ".",)
+mdata <- pData(gset[[1]])
+```
+
+## Samples input
+
+```{r}
+library(affy)
+library(affyPLM)
+
+setwd(wd)
+data_raw <- ReadAffy()
+setwd("..")
+sampleNames(data_raw) <- sub(pattern = "\\.CEL",replacement = "",sampleNames(data_raw))
+```
+
+```{r}
+## RMA normalization
+data_rma <- rma(data_raw)
+data_expr <- exprs(data_rma)
+colnames(data_expr) <- sapply(strsplit(colnames(data_expr),"_"),"[",1) # A name splitting sentence
+```
+
+# DEG
+
+```{r}
+library(limma)
+```
+
+```{r}
+pd <- pd %>% select(geo_accession, source_name_ch1)
+colnames(pd) <- c("id","type")
+pd <- pd[order(pd$type),]
+data_est <- data_est[,pd$id]
+```
+
+```{r}
+# DEG pipeline
+group <- factor(batch_all$groupname, levels = c("HC", "IPAH")) # modify here
+data <- data_expr_all_combatout[,which(is.na(group)==F)]
+design <- model.matrix(~group)
+fit <- lmFit(data,design)
+fit_eBayes <- eBayes(fit)
+options(options = 4)
+DEG <- topTable(fit_eBayes, coef = 2, n = Inf)
+DEG$type <- case_when(DEG$P.Value<0.05&DEG$logFC>0.5~"up",
+                      DEG$P.Value<0.05&DEG$logFC< -0.5~"down",
+                      T~"stable")
+
+DEG_IPAHvHC <- DEG # Output, modify here
+DEG_entrez <- Entrez_map %>% inner_join(DEG, by = "ID")
+KEGG <- enrichKEGG(DEG_entrez$ENTREZID[which(DEG$type != "stable")])
+View(KEGG@result)
+KEGG_IPAHvHC <- KEGG # modify here
+```
+
+# KEGG enrichment
+
+```{r}
+# KEGG enrichment
+## SYMBOL to ENTREZID
+
+######
+# Reference
+# https://www.jianshu.com/p/1d014d910f85
+# Color stuff
+Pset <- fitPLM(data_raw)
+colors <- brewer.pal(12,"Set3")
+
+boxplot(data_est,col=colors,las=3,main="after-RMA")
+# QC by RLE
+Mbox(Pset, ylim = c(-1.1), main="RLE", las=3, col=colors)
+
+# QC by NUSE
+boxplot(Pset, ylim=c(0.97,1.12), col = colors, main= "NUSE", las = 3)
+
+# QC by RNA degradation
+data_deg <- AffyRNAdeg(data_raw)
+plotAffyRNAdeg(data_deg, col = colors)
+legend("topleft", rownames(pData(data_raw)), col = colors, lwd = 1, inset = 0.05, cex = 0.5)
+
+# Volcano plot
+library(ggplot2)
+library(ggrepel)
+ggplot(deg1, aes(x=logFC,y=-log10(P.Value),color=type))+
+  geom_point(alpha=0.4, size=3.0)+
+  geom_text_repel(aes(logFC,-log10(P.Value),label=label), max.overlaps = 20)+
+  scale_color_manual(values=c("#546de5", "#d2dae2","#ff4757"))+
+  geom_vline(xintercept=c(-1,1),lty=4,col="black",lwd=0.8)+
+  geom_hline(yintercept = -log10(0.05), lty=4, col="black",lwd=0.8)+
+  labs(x = "logFC",
+       y = "-log10PValue")+
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position = "right",
+        legend.title=element_blank())
+        
+# Probe ID mapping (to gene names)
+library(AnnoProbe)
+gpl <- gset[[1]]@annotation
+probe2id <- idmap(gpl)
+## Probe ID to symbol
+deg1 <- probe2id %>% 
+inner_join(deg, by = "probe_id") %>%
+select(-probe_id) %>%
+arrange(desc(logFC)) %>%
+distinct(symbol,.keep_all = T)
+deg1$type <- case_when(deg1$P.Value<0.05&deg1$logFC>0.5~"up",
+                       deg1$P.Value<0.05&deg1$logFC< -0.5~"down",
+                      T~"stable")
+deg1$label <- ifelse(deg1$P.Value < 0.01 & abs(deg1$logFC) > 1,deg1$symbol,"")
+```
+
+# Pathview
+
+```{r}
+library(pathview)
+DEG <- DEG_CTDPAHvHC
+DEG_entrez <- merge(DEG, ENTREZ_to_symbol, by = "symbol")
+DEG_entrez_sort <- dplyr::arrange(DEG_entrez, entrez_id)
+DEG_entrez_sort <- unique(DEG_entrez_sort)
+rownames(DEG_entrez_sort) <- DEG_entrez_sort$entrez_id
+pathview_in <- as.matrix(DEG_entrez_sort[,2:7])
+pathwayid = "04658"
+pathview(gene.data = pathview_in[,1],pathway.id = pathwayid, species = "hsa", out.suffix = "CTD-PAHvHC")
+```
+
+# Validation_Sampling
+
+```{r}
+### Sampling
+library(ggbreak)
+sample_CTDPAH <- sample(13164, 394)
+sample_IPAH <- sample(13164, 207)
+same <- intersect(sample_CTDPAH, sample_IPAH)
+DEG_sampling <- c(length(same))
+
+for (i in 1:999) {
+  sample_CTDPAH <- sample(13164, 394)
+  sample_IPAH <- sample(13164, 207)
+  same <- intersect(sample_CTDPAH, sample_IPAH)
+  DEG_sampling <- append(DEG_sampling, length(same))
+}
+View(DEG_sampling)
+DEG_sampling <- as.data.frame(DEG_sampling)
+
+t.test(DEG_sampling, mu = 111, paired = F)
+p <- ggplot(DEG_sampling, aes(x=DEG_sampling)) +
+  geom_histogram(binwidth = 1)+
+  geom_vline(xintercept=111, linetype = "dashed")+
+  xlab("Intersected genes")+
+  scale_x_break(c(20,110),scales = 0.2)
+```

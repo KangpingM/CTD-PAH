@@ -1,0 +1,202 @@
+# Prerequisites
+
+```{r}
+library(dplyr)
+library(GEOquery)
+library(limma)
+library(affy)
+library(AnnoProbe)
+library(RColorBrewer)
+library(clusterProfiler)
+```
+
+# Data preparation
+
+```{r}
+## Parameters, modify here
+GEO_accession = "GSE113439"
+series_matrix_filename = "/Users/kangpinghuang/Library/Mobile Documents/com~apple~CloudDocs/Core/Research/Rheumatology/CTD-PAH/Data"  
+
+GSE_data <- getGEO(filename = series_matrix_filename, getGPL = F)
+GSE_data <- getGEO(GEO = GEO_accession)
+SeriesMatrix <- GSE_data[[1]]@assayData$exprs
+MetaData <- pData(GSE_data[[1]])
+GPL <- GSE_data[[1]]@annotation
+
+```
+
+```{r}
+# limma microarray preprocessing
+datExpr_matrix <- afterrma_GSE117261
+datExpr_corrected <- backgroundCorrect(datExpr_matrix, method = "normexp")
+datExpr_normed <- normalizeBetweenArrays(datExpr_corrected, method = "quantile")
+```
+
+```{r}
+# probeid to symbol, might be specific (see at the last)
+probe2id <- idmap(GPL)
+datExpr_symbol <- data.frame(SeriesMatrix)
+datExpr_symbol$probe_id <- rownames(datExpr_symbol)
+datExpr_symbol <- probe2id %>%
+  inner_join(datExpr_symbol, by = "probe_id") %>%
+  select(-probe_id)
+```
+
+## Duplicated probe id
+
+```{r}
+
+# Modify here
+SeriesMatrixInput <- datExpr_symbol
+Genelist <- unique(SeriesMatrixInput$symbol)
+##
+
+t1 = proc.time()
+for (gene_name in Genelist){
+  gene_name <- data.frame(gene_name)
+  array <- sapply(SeriesMatrixInput[SeriesMatrixInput$symbol == gene_name[1,1],-1], max)
+  array <- data.frame(t(array))
+  array <- cbind(gene_name, array)
+  colnames(array) <- colnames(SeriesMatrixInput)
+  SeriesMatrixInput <- SeriesMatrixInput[SeriesMatrixInput$symbol != gene_name[1,1],]
+  SeriesMatrixInput <- rbind(SeriesMatrixInput, array)
+}
+
+t2 = proc.time()
+t = t2 - t1
+print(t)
+```
+
+```{r}
+# Test expression matrix
+ggplot(SeriesMatrix_GSE48149_clean, aes(x=sample,y=value,))
+
+SeriesMatrix_GSE113439_clean<- SeriesMatrixInput # Modify
+MetaData_GSE <- MetaData
+
+```
+
+## Metadata
+
+```{r}
+# Then process the metadata
+SeriesMatrix_clean <- SeriesMatrix_GSE53408_clean
+MetaData_clean <- MetaData_GSE53408
+MetaData_clean <- MetaData_clean[,c("title","geo_accession","platform_id")]
+MetaData_clean <- MetaData_clean[,]
+SeriesMatrix_copy <- SeriesMatrix_clean[,colnames(SeriesMatrix_clean) %in% MetaData_clean$geo_accession]
+SeriesMatrix_copy$symbol <- SeriesMatrix_clean$symbol
+SeriesMatrix_copy <- SeriesMatrix_copy %>% select(symbol,everything())
+
+all(colnames(SeriesMatrix_copy)[2:22] == MetaData_clean$geo_accession)
+SeriesMatrix_clean <- SeriesMatrix_copy
+```
+
+# Cleaning each dataset
+
+```{r}
+# GSE117261
+MetaData_GSE117261_clean <- MetaData_GSE117261
+MetaData_GSE117261_clean <- MetaData_GSE117261_clean[,c("title","geo_accession","platform_id","pah_subtype:ch1","Sex:ch1")]
+ctd_pah <- c(7,15,21,24,73) # From /Users/kangpinghuang/Library/Mobile Documents/com~apple~CloudDocs/Core/Research/Rheumatology/CTD-PAH/Reference Data/stearman_supplemental_table_e1 copy.xlsx
+MetaData_GSE117261_clean$`pah_subtype:ch1`[ctd_pah] <- "CTD-PAH"
+MetaData_GSE117261_clean <- MetaData_GSE117261_clean[MetaData_GSE117261_clean$`pah_subtype:ch1` %in% c("IPAH","CTD-PAH","Failed Donor"),]
+SeriesMatrix_GSE117261_copy <- SeriesMatrix_GSE117261_clean[,colnames(SeriesMatrix_GSE117261_clean) %in% MetaData_GSE117261_clean$geo_accession]
+SeriesMatrix_GSE117261_copy$symbol <- SeriesMatrix_GSE117261_clean$symbol
+SeriesMatrix_GSE117261_copy <- SeriesMatrix_GSE117261_copy %>% select(symbol,everything())
+
+all(colnames(SeriesMatrix_GSE117261_copy)[2:63] == MetaData_GSE117261_clean$geo_accession)
+SeriesMatrix_GSE117261_clean <- SeriesMatrix_GSE117261_copy
+```
+
+```{r}
+# GSE113439
+MetaData_GSE113439_clean <- MetaData_GSE113439
+MetaData_GSE113439_clean <- MetaData_GSE113439_clean[,c("title","geo_accession","platform_id","disease state:ch1")]
+MetaData_GSE113439_clean <- MetaData_GSE113439_clean[- which(MetaData_GSE113439_clean$`disease state:ch1` %in% c("patient with PAH and CHD","CTEPH patient")),]
+SeriesMatrix_GSE113439_copy <- SeriesMatrix_GSE113439_clean[,colnames(SeriesMatrix_GSE113439_clean) %in% MetaData_GSE113439_clean$geo_accession]
+SeriesMatrix_GSE113439_copy$symbol <- SeriesMatrix_GSE113439_clean$symbol
+SeriesMatrix_GSE113439_copy <- SeriesMatrix_GSE113439_copy %>% select(symbol,everything())
+
+all(colnames(SeriesMatrix_GSE113439_copy)[2:22] == MetaData_GSE113439_clean$geo_accession)
+SeriesMatrix_GSE113439_clean <- SeriesMatrix_GSE113439_copy
+# GSE53408 (from raw data)
+SeriesMatrix_GSE53408 <- data_expr
+```
+
+# Removing batch effect
+
+Prerequisites
+
+```{r}
+library(sva)
+library(limma)
+library(ggplot2)
+library(ggforce)
+```
+
+```{r}
+# Input
+edata <- as.matrix(SeriesMatrix_all_test)
+pheno <- MetaData_all_test # modify here
+batch <- pheno$dataset
+
+# removeBatchEffect
+RBE_edata <- removeBatchEffect(edata, batch = batch)
+
+# ComBat
+# mod <- model.matrix(~as.factor(groupname), data = pheno)
+# mod0 = model.matrix(~1, data = pheno)
+# modcombat = model.matrix(~1, data = pheno)
+# ComBat_edata <- ComBat(edata, batch = batch, mod = modcombat)
+# pValuesComBat = f.pvalue(ComBat_edata,mod,mod0)
+# qValuesComBat = p.adjust(pValuesComBat,method="BH")
+
+
+PCA_in <- RBE_edata
+PCA_raw <- t(PCA_in)
+PCA_raw <- scale(PCA_raw)
+PCA <- prcomp(PCA_raw, center = F, scale = F)
+PCA <- data.frame(PCA$x)
+PCA$dataset <- pheno$dataset
+PCA$group <- pheno$group
+
+PCA <- PCA_beforerbe_test
+PCA <- PCA_afterrbe_test
+
+ggplot(PCA,aes(x=PC1,y=PC2))+
+  geom_point(aes(color = dataset))+
+  ggtitle("After removeBatchEffect")+ # Modify here
+  theme_bw()
+
+PCA_afterrbe_test <- PCA
+plot(PCA[,c(1:2)], main = "SeriesMatrix from GSE113439")
+SeriesMatrix_clean_test <- RBE_edata
+# datExpr_combatout <- ComBat_edata
+
+######
+# GSE22356
+MetaData_GSE22356_temp <- MetaData_GSE22356_clean
+colnames(MetaData_GSE22356_temp) <- c("geo_accession","platform_id","grouptype","geo_dataset","gender")
+
+# GSE33463
+MetaData_GSE33463_temp <- MetaData_GSE33463_clean
+MetaData_GSE33463_temp <- MetaData_GSE33463_temp[,1:5]
+colnames(MetaData_GSE33463_temp) <- c("geo_accession","platform_id","grouptype","geo_dataset","gender")
+
+# Blood
+# MetaData steps
+MetaData_all <- rbind(MetaData_GSE22356_temp,MetaData_GSE33463_temp)
+MetaData_all$grouptype[MetaData_all$grouptype == "Scleroderma without Pulmonary Hypertension"] <- "SSc"
+MetaData_all$grouptype[MetaData_all$grouptype == "Scleroderma with Pulmonary Hypertension"] <- "SSc-PAH"
+MetaData_all$grouptype[MetaData_all$grouptype == "Idiopathic Pulmonary Arterial Hypertension"] <- "IPAH"
+MetaData_all$grouptype[MetaData_all$grouptype == "Normal (no pulmonary hypertension)"] <- "HC"
+MetaData_all$grouptype[MetaData_all$grouptype == "control"] <- "HC"
+MetaData_all$grouptype[MetaData_all$grouptype == "Scleroderma with Pulmonary Arterial Hypertension"] <- "SSc-PAH"
+MetaData_all$grouptype[MetaData_all$grouptype == "Scleroderma only"] <- "SSc"
+
+# SeriesMatrix steps
+SeriesMatrix_all <- SeriesMatrix_GSE22356_clean %>% 
+  inner_join(SeriesMatrix_GSE33463_clean, by = "symbol")
+all(colnames(SeriesMatrix_all)[-1] == MetaData_all$geo_accession)
+```

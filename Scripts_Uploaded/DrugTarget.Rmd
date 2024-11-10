@@ -1,0 +1,134 @@
+# Prerequisites
+```{r}
+library(dplyr)
+library(ggplot2)
+```
+
+# KEGG gene list
+```{r}
+library(KEGGREST)
+library(org.Hs.eg.db)
+library(tidyverse)
+hsa_path_eg  <- keggLink("pathway", "hsa") %>% 
+  tibble(pathway = ., eg = sub("hsa:", "", names(.)))
+
+hsa_kegg_anno <- hsa_path_eg %>%
+  mutate(
+    symbol = mapIds(org.Hs.eg.db, eg, "SYMBOL", "ENTREZID")
+  )
+
+Genelist_TNF <- hsa_kegg_anno[hsa_kegg_anno$pathway == 'path:hsa04668', 3]
+Genelist_Th1Th2 <- hsa_kegg_anno[hsa_kegg_anno$pathway == 'path:hsa04658', 3]
+Genelist_TNF <- Genelist_TNF[,3]
+
+drug_targets <- drug_targets_lite[drug_targets_lite$Approved.symbol %in% Genelist_Th1Th2[,1],]
+drug_targets_Th1Th2 <- drug_targets
+
+```
+
+# Read the database
+```{r}
+relationships_PharmGKB <- read.delim2(
+  "~/Library/Mobile Documents/com~apple~CloudDocs/Core/Research/Rheumatology/CTD-PAH/Reference Data/relationships_PharmGKB/relationships.tsv")
+relationships_genes_PharmGKB <- relationships_PharmGKB[relationships_PharmGKB$Entity1_type == "Gene",]
+
+
+
+DTG_list <- unique(relationships_genes[relationships_genes$Entity1_type == "Gene",]$Entity1_name)
+
+relationships_genes_reversed <- relationships_PharmGKB[relationships_PharmGKB$Entity2_type == "Gene" & relationships_PharmGKB$Entity1_type %in% c("Disease", "Chemical"),]
+
+relationships_genes <- relationships_PharmGKB[relationships_PharmGKB$Entity1_type == "Gene",]
+relationships_genes <- relationships_genes[relationships_genes$Entity2_type %in% c("Disease","Chemical"),]
+
+
+relationships_druggene <- relationships_PharmGKB[relationships_PharmGKB$Entity1_type == "Gene" & 
+                                                 relationships_PharmGKB$Entity2_type == "Chemical",]
+```
+
+# Target finding
+```{r}
+  
+deginmod_CTDPAH_pink <- intersect(deg_CTDPAHmIPAH, pink_module)
+deginmod_CTDPAH_purple <- intersect(deg_CTDPAHmIPAH, purple_module)
+deginmod_all_pink <- intersect(deg_CTDPAHiIPAH, pink_module)
+deginmod_allCTDPAH_pink <- intersect(deg_CTDPAH, pink_module)
+drug_info <- drug_all$general_information
+
+gene_conversion <- drug_targets_polypep_ex_ident[drug_targets_polypep_ex_ident$resource == "HUGO Gene Nomenclature Committee (HGNC)",]
+colnames(HGNC_ID2symbol)[1] = "identifier"
+gene_conversion <- inner_join(gene_conversion, HGNC_ID2symbol, by = "identifier")
+colnames(gene_conversion)[3] = "id"
+drug_targets_new <- inner_join(gene_conversion, drug_targets, by = "id")
+colnames(drug_targets_new)[10] = "primary_key"
+drug_targets_new <- inner_join(drug_targets_new, drug_info, by = "primary_key")
+drug_targets_lite <- drug_targets_new[,c("id", "Approved.symbol", "Approved.name", "primary_key", "name.y")]
+colnames(drug_targets_lite)[5] = "drug_name"
+
+# Target finding
+
+fourmodule <- c(pink_module, purple_module, red_module, greenyellow_module)
+
+Genelist <- intersect(deg_CTDPAH, pink_module) # modify here
+drug_targets <- drug_targets_new[drug_targets_lite$Approved.symbol %in% Genelist,]
+
+drug_targets_CTDPAH_pink <- drug_targets
+drug_targets_CTDPAH_purple <- drug_targets
+deginmod_allCTDPAH_purple <- Genelist
+
+
+write.table(drug_targets_IPAH_red, file = "drug_targets_IPAH_red.txt", quote = F, row.names = F, sep = "\t")
+
+
+# Plotting 
+by_gene_CTDPAH_purple <- drug_targets_CTDPAH_purple %>% 
+  group_by(Approved.symbol) %>%
+  summarize(num = n()) %>%
+  arrange(desc(num))
+ggplot(drug_targets_CTDPAH_pink)+
+  geom_bar(mapping = aes(x = Approved.symbol, fill = Approved.symbol), show.legend = F)+
+  labs(x = "Gene symbol", y = "Potential drug count")+
+  ggtitle("Drugbank screening - pink module")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+write.table(drug_targets_IPAH_greenyellow, file = "drug_targets_IPAH_greenyellow.txt", quote = F, row.names = F, sep = "\t")
+
+
+library(VennDiagram)
+library(gplots)
+color_pink = "#F5C2CC"
+color_purple = "#933CE7"
+color_drug = "#74DDD0"
+draw.triple.venn(
+  area1 = 283,
+  area2 = 196,
+  area3 = 14,
+  n12 = 39,
+  n23 = 14,
+  n13 = 14,
+  n123 = 14,
+  category = c("unique CTDPAH", "pink module", "drug targeted"),
+  fill = c(color_CTDPAH,color_pink, color_drug),
+  alpha = 0.8,
+  cex = 2,
+  cat.cex = 1.5,
+  cat.pos = c(180,180,180)
+)
+
+draw.triple.venn(
+  area1 = 283,
+  area2 = 106,
+  area3 = 15,
+  n12 = 54,
+  n23 = 15,
+  n13 = 15,
+  n123 = 15,
+  category = c("unique CTDPAH", "purple module", "drug targeted"),
+  fill = c(color_CTDPAH,color_purple, color_drug),
+  alpha = 0.8,
+  cex = 2,
+  cat.cex = 1.5,
+  cat.pos = c(180,180,180)
+)
+```
+

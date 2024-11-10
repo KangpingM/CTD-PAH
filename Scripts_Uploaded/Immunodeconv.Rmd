@@ -1,0 +1,177 @@
+# Prerequisites
+```{r}
+library(tidyr)
+library(dplyr)
+library(pheatmap)
+library(xCell)
+library(rstatix)
+library(ggplot2)
+```
+
+# Data
+```{r}
+group <- "CTD-PAH" # modify here
+SeriesMatrix_exp <- exp(SeriesMatrix_clean_test)
+
+idc_input <- SeriesMatrix_clean_test # may modify here
+
+## immunedeconv
+idc_result <- deconvolute(idc_input, method = "xcell")
+
+## xCell
+idc_result <- xCellAnalysis(idc_input)
+
+idc_67 <- data.frame(idc_result)
+
+# Data modification
+idc_67_log <- log(idc_67)
+idc_67_log[idc_67_log < -10] <- -10
+
+idc_67_group <- MetaData_all_test$group
+idc_67_ttest <- data.frame(t(idc_67))
+idc_67_ttest$group <- idc_67_group
+```
+
+# T-test
+```{r}
+library(reshape2)
+library(rstatix)
+IDC_website <- data.frame(t(IDC_website))
+IDC_website$group <- MetaData_all_test[rownames(IDC_website),"group"]
+all(rownames(IDC_website) == MetaData_all_test$geo_accession)
+
+idc_67_ttest_CTDPAHvHC <- idc_67_ttest[idc_67_ttest$group %in% c("CTD-PAH","HC"),]
+idc_67_ttest_CTDPAHvIPAH <- idc_67_ttest[idc_67_ttest$group %in% c("CTD-PAH","IPAH"),]
+
+IDC_web_CTDPAHvHC <- IDC_website[IDC_website$group %in% c("CTD-PAH","HC"),]
+IDC_web_CTDPAHvIPAH <- IDC_website[IDC_website$group %in% c("CTD-PAH","IPAH"),]
+IDC_web_IPAHvHC <- IDC_website[IDC_website$group %in% c("IPAH","HC"),]
+
+IDC_web_IPAHvHC_result <- melt(IDC_web_IPAHvHC, id.vars = "group") %>%
+  group_by(variable) %>%
+  t_test(value~group, ref.group = "IPAH") %>%
+  adjust_pvalue(method = "BH")
+
+IDC_web_IPAHvHC_numbers <- mutate_all(IDC_web_IPAHvHC[,1:67], as.numeric)
+IDC_web_IPAHvHC_all <- cbind(IDC_web_IPAHvHC_numbers, as.data.frame(IDC_web_IPAHvHC$group))
+colnames(IDC_web_IPAHvHC_all)[68] <- "group"
+IDC_web_IPAHvHC <- IDC_web_IPAHvHC_all
+```
+
+# Heatmap
+```{r}
+# Heatmap
+annotation_col_dataset = as.data.frame(MetaData_all_test$dataset)
+colnames(annotation_col_dataset) = "Dataset"
+rownames(annotation_col_dataset) = colnames(SeriesMatrix_clean_test)
+
+annotation_col = as.data.frame(MetaData_all_test$group)
+colnames(annotation_col) = "Group"
+rownames(annotation_col) = colnames(SeriesMatrix_clean_test)
+color.key <- c("#3300CC", "#3399FF", "white", "#FF3333", "#CC0000")
+
+pheatmap(
+    IDC_website[1:64,],
+    color = colorRampPalette(color.key)(50),
+    border_color = NA,
+    annotation_col = annotation_col,
+    labels_row = NULL,
+    cluster_cols = T,
+    clustering_method = "ward.D2",
+    show_rownames = T,
+    show_colnames = T,
+    fontsize_col = 5
+  )
+```
+
+# Box plot
+```{r}
+# Box plot
+library(reshape2)
+library(ggpubr)
+library(RColorBrewer)
+IDC_website_molten <- melt(IDC_website, id.vars = "group")
+IDC_website_molten$variable <- factor(IDC_website_molten$variable)
+IDC_website_molten$group <- factor(IDC_website_molten$group, levels = c("CTD-PAH","IPAH","HC"))
+class(IDC_website_molten$value) <- "numeric"
+
+IDC_website <- data.frame(IDC_website)
+IDC_test <- IDC_website[,c("ImmuneScore","group")]
+
+class(IDC_website_molten$variable[1])
+
+Tested_group <- c("CTD-PAH","IPAH")
+Tested_cell <- c("NK.cells","Neutrophils","Tregs","Monocytes","CD4..T.cells", "pro.B.cells","Plasma.cells","mv.Endothelial.cells")  # CTD-PAH
+Tested_cell <- c("NK.cells","Th1.cells","Neutrophils","Tregs","Monocytes","CD4..T.cells", "pDC","Th2.cells")  # IPAH
+Tested_cell <- c("CD4..T.cells", "NK.cells","Neutrophils","Tregs","Monocytes", "pro.B.cells","Plasma.cells","mv.Endothelial.cells")
+
+Tested_sets <- IDC_website_molten %>% 
+  filter(group %in% Tested_group, variable %in% Tested_cell) %>% 
+  arrange(variable, group)
+
+Tested_sets
+symnum_list <- list(cutpoints = c(0,0.0001,0.001,0.01,0.05,Inf),symbols = c("****","***","**","*","ns"))
+
+p <- ggplot(Tested_sets, aes(x=variable, y=value, fill=group))
+p + geom_boxplot()+
+  scale_fill_manual(values = c(color_IPAH, color_HC))+
+  stat_compare_means(mapping = aes(group=group), data = NULL,
+                     method = "t.test", symnum.args = symnum_list)+
+  ylab("Abundance")+
+  xlab("Cell type")
+
+```
+
+
+# Correlation & Lollipop plot
+```{r}
+library(ggpubr)
+deg <- deg_CTDPAHvHC
+xCellMatrix <- IDC_website[IDC_website$group == "CTD-PAH", ] %>% select(Plasma.cells)
+SeriesMatrix <- t(SeriesMatrix_clean_test[,MetaData_all_test$group == "CTD-PAH"])
+SeriesMatrix <- SeriesMatrix[,colnames(SeriesMatrix) %in% deg]
+xCellMatrix <- as.numeric(t(xCellMatrix))
+
+View(xCellMatrix)
+View(SeriesMatrix)
+
+
+cor_data_df <- data.frame(deg)
+for (i in 1:length(colnames(SeriesMatrix))) {
+  test <- cor.test(SeriesMatrix[,i], xCellMatrix, type="spearman")
+  cor_data_df[i,2] <- test$estimate
+  cor_data_df[i,3] <- test$p.value
+}
+names(cor_data_df) <- c("symbol","correlation","p.value")
+
+cor_CTDPAH_plasmacells <- cor_data_df
+
+# Drawing part
+deginmod_IPAH_greenyellow <- intersect(deg_IPAH, greenyellow_module)
+
+cor_chart <- cor_IPAH_Th2cells[cor_IPAH_Th2cells$symbol %in% deginmod_IPAH_greenyellow,]
+cor_chart <- cor_chart[1:7,]
+lollipop <- ggplot(cor_chart, aes(x=symbol, y=correlation))
+
+lollipop + geom_segment(aes(x=symbol, xend=symbol, y=0, yend=correlation))+
+  geom_point(aes(size=abs(correlation), color=p.value))+
+  title(main = "Correlation of CTD-PAH DEGs with Plasma Cells")  
+
+ggplot(cor_chart, aes(x=symbol, y=correlation))+ 
+  geom_segment(aes(x=symbol, xend=symbol, y=0, yend=correlation))+
+  geom_point(aes(size=abs(correlation), color=p.value))
+
+# ggdotchart(cor_chart, x = "symbol", y = "correlation",
+#            size = "correlation", sorting = "descending", color = "p.value",
+#            add = "segments", ggtheme = theme_pubr(),
+#            xlab = "")
+  
+  
+
+SeriesMatrix_HC <- SeriesMatrix_all_test[,MetaData_all_test$group == "HC"]
+SeriesMatrix_HC <- exp(SeriesMatrix_HC*log(2))
+write.table(SeriesMatrix_HC, "SeriesMatrix_HC.txt",quote = F, sep = "\t")
+CSResult_HC <- CIBERSORT("Reference Data/LM22.txt","SeriesMatrix_HC.txt",perm = 1000, QN=T)
+```
+
+

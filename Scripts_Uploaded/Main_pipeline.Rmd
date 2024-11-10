@@ -1,0 +1,517 @@
+---
+title: "Main_pipeline"
+author: "Kangping Huang"
+date: "2024-05-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Prerequisites
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+library(tidyverse)
+library(GEOquery)
+library(limma)
+library(affy)
+library(AnnoProbe)
+library(RColorBrewer)
+library(clusterProfiler)
+```
+
+# Data importing
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+library(GEOquery)
+library(limma)
+
+GEO_accessions = c("GSE48149","GSE113439", "GSE117261")
+series_matrix_filename = "/Users/kangpinghuang/Library/Mobile Documents/com~apple~CloudDocs/Core/Research/Rheumatology/CTD-PAH/Data"  
+
+for (accession in GEO_accessions) {
+  GSE_data <- getGEO(GEO = accession, GSEMa)
+  SeriesMatrix <- GSE_data[[1]]@assayData$exprs
+  MetaData <- pData(GSE_data[[1]])
+  GPL <- GSE_data[[1]]@annotation
+}
+
+```
+
+```{r}
+library(affy)  # Load the affy package if dealing with Affymetrix data
+raw_data <- ReadAffy()  # Read the CEL files
+eset_raw <- exprs(raw_data)  # Get raw expression values
+
+# Apply RMA background correction
+rma_data <- rma(raw_data, background.correct = TRUE, normalize = FALSE, summary = FALSE)
+eset_corrected <- exprs(rma_data)
+
+# Plotting
+par(mfrow=c(1,2))
+hist(log2(eset_raw), main="Before Background Correction", xlab="Log2 Intensity", col="blue")
+hist(log2(eset_corrected), main="After Background Correction", xlab="Log2 Intensity", col="red")
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+## GSE48149
+
+```{r}
+
+SeriesMatrix_GSE48149_log <- log2(SeriesMatrix_GSE48149)
+
+GPL16221.11373 <- read.delim(
+  "~/Library/Mobile Documents/com~apple~CloudDocs/Core/Research/Rheumatology/CTD-PAH/Reference Data/GPL16221-11373.txt", comment.char="#"
+  )
+probe2id <- GPL16221.11373[,c("Transcript","Symbol")]
+colnames(probe2id) <- c("probe_id","symbol")
+
+SeriesMatrix_GSE48149_symbol <- data.frame(SeriesMatrix_GSE48149_normed)
+SeriesMatrix_GSE48149_symbol$probe_id <- rownames(SeriesMatrix_GSE48149_symbol)
+SeriesMatrix_GSE48149_symbol <- probe2id %>%
+  inner_join(SeriesMatrix_GSE48149_symbol, by = "probe_id") %>%
+  select(-probe_id)
+```
+
+# Data QC
+
+Directly importing **rawData**
+
+## Raw data plots
+
+```{r}
+library(ggplot2)
+library(reshape2)
+
+data_expr_GSE117261_probeMelt <- melt(data_expr_GSE117261_probe)
+data_expr_GSE117261_probeMelt <- data_expr_GSE117261_probeMelt %>%
+  select(-probe_id)
+
+ggplot(data_expr_GSE117261_probeMelt, aes(x = variable, y = value)) +
+  geom_violin(fill = "lightblue") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("GSE117261 Raw Data") +
+  xlab("Sample") +
+  ylab("Intensity")
+
+data_expr_GSE113439_probeMelt <- melt(data_expr_GSE113439_probe)
+data_expr_GSE113439_probeMelt <- data_expr_GSE113439_probeMelt %>%
+  select(-probe_id)
+
+ggplot(data_expr_GSE113439_probeMelt, aes(x = variable, y = value)) +
+  geom_violin(fill = "lightblue") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("GSE113439 Raw Data") +
+  xlab("Sample") +
+  ylab("Intensity")
+
+data_expr_GSE48149_probeMelt <- melt(data_expr_GSE48149_probe)
+data_expr_GSE48149_probeMelt <- data_expr_GSE48149_probeMelt %>%
+  select(-ID_REF)
+
+ggplot(data_expr_GSE48149_probeMelt, aes(x = variable, y = value)) +
+  geom_violin(fill = "lightblue") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  ggtitle("GSE48149 Raw Data") +
+  xlab("Sample") +
+  ylab("Intensity")
+
+```
+
+## Correlational matrix
+
+```{r}
+library(limma)
+normalizeWithinArrays()
+
+data_expr_GSE113439_mat <- data_expr_GSE113439 %>%
+  select(-symbol)
+data_expr_GSE113439_mat <- as.matrix(data_expr_GSE113439_mat)
+
+cor_matrix <- cor(data_expr_GSE113439_mat, method = "pearson")
+heatmap(cor_matrix, main = "Correlation Matrix Heatmap of GSE113439", col = heat.colors(256))
+
+# distance_matrix <- dist(t(data_expr_GSE113439_mat))
+# hc <- hclust(distance_matrix)
+# plot(hc)
+
+data_expr_GSE117261_mat <- data_expr_GSE117261 %>%
+  select(-symbol) %>%
+  as.matrix()
+
+cor_matrix <- cor(data_expr_GSE117261_mat, method = "pearson")
+heatmap(cor_matrix, main = "Correlation Matrix Heatmap of GSE117261", col = heat.colors(256))
+
+data_expr_GSE48149_mat <- data_expr_GSE48149 %>%
+  select(-symbol) %>%
+  as.matrix()
+
+cor_matrix <- cor(data_expr_GSE48149_mat, method = "pearson")
+heatmap(cor_matrix, main = "Correlation Matrix Heatmap of GSE48149", col = heat.colors(256))
+```
+
+## PCA
+
+```{r}
+pca <- prcomp(t(data_expr_GSE48149_mat), scale. = T)
+pca_df <- as.data.frame(pca$x)
+pca_df$Sample <- rownames(pca_df)  # Add sample names to the data frame
+
+# Plot PCA and label the data points
+ggplot(pca_df, aes(x = PC1, y = PC2, label = Sample)) +
+  geom_point(color = "blue") +               # Plot points
+  geom_text(aes(label = Sample), vjust = -1) +  # Add text labels above points
+  ggtitle("PCA Plot of GSE48149") +
+  xlab(paste("PC1 -", round(100 * summary(pca)$importance[2, 1], 1), "% Variance")) +
+  ylab(paste("PC2 -", round(100 * summary(pca)$importance[2, 2], 1), "% Variance")) +
+  theme_minimal()
+
+pca <- prcomp(t(data_expr_GSE113439_mat), scale. = T)
+pca_df <- as.data.frame(pca$x)
+pca_df$Sample <- rownames(pca_df)  # Add sample names to the data frame
+
+# Plot PCA and label the data points
+ggplot(pca_df, aes(x = PC1, y = PC2, label = Sample)) +
+  geom_point(color = "blue") +               # Plot points
+  geom_text(aes(label = Sample), vjust = -1) +  # Add text labels above points
+  ggtitle("PCA Plot of GSE113439") +
+  xlab(paste("PC1 -", round(100 * summary(pca)$importance[2, 1], 1), "% Variance")) +
+  ylab(paste("PC2 -", round(100 * summary(pca)$importance[2, 2], 1), "% Variance")) +
+  theme_minimal()
+
+pca <- prcomp(t(data_expr_GSE117261_mat), scale. = T)
+pca_df <- as.data.frame(pca$x)
+pca_df$Sample <- rownames(pca_df)  # Add sample names to the data frame
+
+# Plot PCA and label the data points
+ggplot(pca_df, aes(x = PC1, y = PC2, label = Sample)) +
+  geom_point(color = "blue") +               # Plot points
+  geom_text(aes(label = Sample), vjust = -1) +  # Add text labels above points
+  ggtitle("PCA Plot of GSE117261") +
+  xlab(paste("PC1 -", round(100 * summary(pca)$importance[2, 1], 1), "% Variance")) +
+  ylab(paste("PC2 -", round(100 * summary(pca)$importance[2, 2], 1), "% Variance")) +
+  theme_minimal()
+```
+
+## Residual Batch
+
+Analysis without GSE113439
+
+```{r}
+
+GEO_accessions <- MetaData_all_test %>%
+  filter(dataset %in% c("GSE117261", "GSE48149")) %>%
+  select(geo_accession)
+GEO_accessions <- as.vector(t(GEO_accessions))
+SeriesMatrix_all_test_ex113439 <- SeriesMatrix_all_test %>%
+  select(any_of(GEO_accessions$geo_accession))
+
+SeriesMatrix_all_test_ex113439 <- as.matrix(SeriesMatrix_all_test_ex113439)
+batch <- MetaData_ex113439_test$dataset
+
+RBE_edata <- removeBatchEffect(SeriesMatrix_all_test_ex113439, batch = batch)
+SeriesMatrix_clean_test_ex113439 <- RBE_edata
+MetaData_ex113439_test <- MetaData_all_test %>%
+  filter(dataset != "GSE113439")
+
+```
+
+PCA
+
+```{r}
+# PCA
+PCA_in <- SeriesMatrix_all_test_ex113439
+pheno <- MetaData_ex113439_test
+PCA_raw <- t(PCA_in)
+PCA <- prcomp(PCA_raw, center = F, scale = T)
+PCA <- data.frame(PCA$x)
+PCA$dataset <- pheno$dataset
+PCA$group <- pheno$group
+
+PCA_beforerbe_test <- PCA
+
+ggplot(PCA,aes(x=PC1,y=PC2))+
+  geom_point(aes(color = dataset))+
+  ggtitle("Before removeBatchEffect")+ # Modify here
+  theme_bw()
+
+ggplot(PCA,aes(x=PC1,y=PC2))+
+  geom_point(aes(color = group))+
+  ggtitle("Before removeBatchEffect")+ # Modify here
+  theme_bw()
+
+```
+
+```{r}
+PCA_in <- SeriesMatrix_clean_test_ex113439
+pheno <- MetaData_ex113439_test
+PCA_raw <- t(PCA_in)
+PCA <- prcomp(PCA_raw, center = F, scale = T)
+PCA <- data.frame(PCA$x)
+PCA$dataset <- pheno$dataset
+PCA$group <- pheno$group
+
+PCA_afterrbe_test <- PCA
+
+ggplot(PCA,aes(x=PC1,y=PC2))+
+  geom_point(aes(color = dataset))+
+  ggtitle("After removeBatchEffect")+ # Modify here
+  theme_bw()
+
+ggplot(PCA,aes(x=PC1,y=PC2))+
+  geom_point(aes(color = group))+
+  ggtitle("After removeBatchEffect")+ # Modify here
+  theme_bw()
+```
+
+```{r}
+# DEG analysis
+group <- factor(MetaData_ex113439_test$group, levels = c("HC","CTD-PAH")) # modify here
+data <- SeriesMatrix_clean_test_ex113439[,which(is.na(group)==F)] # may modify here
+design <- model.matrix(~group)
+fit <- lmFit(data,design)
+fit_eBayes <- eBayes(fit)
+options(options = 4)
+DEG <- topTable(fit_eBayes, coef = 2, n = Inf)
+DEG$type <- case_when(DEG$P.Value< 0.01 & DEG$logFC>0.5~"up",
+                      DEG$P.Value < 0.01 & DEG$logFC< -0.5~"down",
+                      T~"stable")
+
+DEG_CTDPAHvHC_ex113439 <- DEG
+DEG_CTDPAHvHC_ex113439_changed <- DEG %>%
+  filter(type != "stable")
+deg_CTDPAH_ex113439 <- rownames(DEG %>%
+  filter(type != "stable") 
+)
+```
+
+Plot making
+
+```{r}
+library(ggrepel)
+DEG <- DEG_CTDPAHvHC_ex113439
+DEG$symbol <- rownames(DEG)
+ggplot(DEG, aes(x=logFC, y=-log10(P.Value),color = type))+ # Modify here
+  geom_point(size = 1)+
+  scale_color_manual(values = c("#00008B","#808080","#DC143C"))+
+  geom_text_repel(
+    data = DEG[DEG$adj.P.Val < 0.01 & abs(DEG$logFC)>1,],
+    aes(label = symbol,), 
+    size = 4
+  )+
+  theme_bw()+
+  theme(
+    legend.title = element_blank(),
+    plot.title=element_text(family='',hjust = 0,vjust = 1, size=14)
+  )+
+  ggtitle("CTD-PAH v HC")+ # Modify here
+  ylab('-log10 (PValue)')+
+  xlab('log(FoldChange)')+
+  geom_vline(xintercept=c(-0.5,0.5),lty=3,col="black",lwd=0.5) +
+  geom_hline(yintercept = 2,lty=3,col="black",lwd=0.5)
+```
+
+Venn Making
+
+```{r}
+library(ggvenn)
+x <- list(deg_CTDPAH_ex113439,deg_IPAH_ex113439)
+names(x) <- c("CTD-PAH","IPAH")
+Venn_diagram_F1C <- ggvenn(x,
+      fill_color = c(color_CTDPAH,color_IPAH),
+      stroke_linetype = "blank",
+      set_name_size = 8,
+      text_size = 7)+
+  theme(
+    legend.title = element_blank(),
+    plot.title=element_text(family='',hjust = 0,vjust = 1, size=18)
+  )
+
+deg_CTDPAHmIPAH_ex113439 <- setdiff(deg_CTDPAH_ex113439, deg_IPAH_ex113439)
+deg_IPAHmCTDPAH_ex113439 <- setdiff(deg_IPAH_ex113439, deg_CTDPAH_ex113439)
+deg_CTDPAHiIPAH_ex113439 <- intersect(deg_CTDPAH_ex113439, deg_IPAH_ex113439)
+write.table(deg_CTDPAHmIPAH_ex113439, file = "deg_CTDPAHmIPAH_ex113439.txt", quote = F,col.names = F, row.names = F,sep = "\n")
+
+write.table(deg_IPAHmCTDPAH_ex113439, file = "deg_IPAHmCTDPAH_ex113439.txt",quote = F,col.names = F, row.names = F, sep = "\n")
+write.table(deg_CTDPAHiIPAH_ex113439, file = "deg_CTDPAHiIPAH_ex113439.txt",quote = F,col.names = F, row.names = F, sep = "\n")
+```
+
+KEGG
+
+```{r}
+# Importing from DAVID
+KEGG <- GO_CTDPAHiIPAH_ex_BP
+KEGG$Term <- sapply(KEGG$Term, 
+                    function(x) str_split_fixed(x, pattern = "~", n=2)[2])
+KEGG <- KEGG[1:10,] %>%
+  arrange(Benjamini) 
+KEGG$GeneRatio <- KEGG$Count/KEGG$List.Total
+ggplot(KEGG,aes(x=GeneRatio, y=Term, size=Count,color=-log10(Benjamini)))+ # Modify here
+  geom_point()+
+  scale_color_gradient(low = "blue",high = "red")+
+  labs(y = "Terms",color = "-log10(Padj)")+
+  theme_bw()+
+  ggtitle("Shared Terms") # Modify here
+```
+
+# GO Enrichment
+
+```{r}
+GO_enrich
+```
+
+# GSEA
+
+```{r}
+library(clusterProfiler)
+library(enrichplot)
+
+
+gseaplot2(GSEA_IPAHvHC_GO, geneSetID = "GO:0045766~positive regulation of angiogenesis", pvalue_table = T)
+gseaplot2(GSEA_CTDPAHvIPAH_GO, geneSetID = "GO:0006364~rRNA processing")
+
+```
+
+# Deconvolution Analysis
+
+## xCell
+
+## Box plot
+
+```{r}
+# Box plot
+library(reshape2)
+library(ggpubr)
+library(RColorBrewer)
+IDC_website_molten <- melt(IDC_website, id.vars = "group")
+IDC_website_molten$variable <- factor(IDC_website_molten$variable)
+IDC_website_molten$group <- factor(IDC_website_molten$group, levels = c("CTD-PAH","IPAH","HC"))
+class(IDC_website_molten$value) <- "numeric"
+
+IDC_website <- data.frame(IDC_website)
+IDC_test <- IDC_website[,c("ImmuneScore","group")]
+
+class(IDC_website_molten$variable[1])2
+
+Tested_group <- c("CTD-PAH","IPAH")
+Tested_cell <- c("NK.cells","Neutrophils","Tregs","Monocytes","CD4..T.cells", "pro.B.cells","Plasma.cells","mv.Endothelial.cells")  # CTD-PAH
+Tested_cell <- c("NK.cells","Th1.cells","Neutrophils","Tregs","Monocytes","CD4..T.cells", "pDC","Th2.cells")  # IPAH
+Tested_cell <- c("CD8..Tcm","CD8..naive.T.cells", "NK.cells","Th1.cells","Th2.cells","Tregs","mv.Endothelial.cells", "CD8..Tem","Endothelial.cells") # CTD-PAH v IPAH
+
+Tested_sets <- IDC_website_molten %>% 
+  filter(group %in% Tested_group, variable %in% Tested_cell) %>% 
+  arrange(variable, group)
+
+Tested_sets
+symnum_list <- list(cutpoints = c(0,0.0001,0.001,0.01,0.05,Inf),symbols = c("****","***","**","*","ns"))
+
+p <- ggplot(Tested_sets, aes(x=variable, y=value, fill=group))
+p + geom_boxplot()+
+  scale_fill_manual(values = c(color_CTDPAH, color_IPAH))+
+  stat_compare_means(mapping = aes(group=group), data = NULL,
+                     method = "t.test", symnum.args = symnum_list)+
+  ylab("Abundance")+
+  xlab("Cell type")
+```
+
+## Correlation
+
+```{r}
+library(ggpubr)
+deg <- deg_CTDPAHvHC
+xCellMatrix <- IDC_website[IDC_website$group == "IPAH", ] %>% select(mv.Endothelial.cells)
+SeriesMatrix <- t(SeriesMatrix_clean_test[,MetaData_all_test$group == "CTD-PAH"])
+SeriesMatrix <- SeriesMatrix[,colnames(SeriesMatrix) %in% deg]
+xCellMatrix <- as.numeric(t(xCellMatrix))
+
+View(xCellMatrix)
+View(SeriesMatrix)
+
+cor_data_df <- data.frame(deg)
+for (i in 1:length(colnames(SeriesMatrix))) {
+  test <- cor.test(SeriesMatrix[,i], xCellMatrix, type="spearman")
+  cor_data_df[i,2] <- test$estimate
+  cor_data_df[i,3] <- test$p.value
+}
+names(cor_data_df) <- c("symbol","correlation","p.value")
+
+cor_IPAH_CD8Tem <- cor_data_df
+```
+
+```{r}
+deginmod_IPAH_greenyellow <- intersect(deg_IPAH, greenyellow_module)
+
+cor_chart <- cor_CTDPAH_mvEndothelialcells
+
+# ONLY for IPAH
+cor_chart <- cor_chart %>%
+  filter(symbol %in% c("CR1", "GBP5", "EDN1", "CCL5", "WEE1", "PHLDA1", "S100A12"))
+
+# ONLY for CTD-PAH
+cor_chart <- cor_chart %>%
+  filter(symbol %in% c("C7","PAPPA","IGF1","RRAS","SLCO2A1","GPX3"))
+lollipop <- ggplot(cor_chart, aes(x=symbol, y=correlation))
+C
+lollipop + geom_segment(aes(x=symbol, xend=symbol, y=0, yend=correlation))+
+  geom_point(aes(size=abs(correlation), color=p.value))+
+  title(main = "Correlation of CTD-PAH DEGs with Plasma Cells")  
+
+ggplot(cor_chart, aes(x=symbol, y=correlation))+ 
+  geom_segment(aes(x=symbol, xend=symbol, y=0, yend=correlation))+
+  geom_point(aes(size=abs(correlation), color=p.value))
+
+ggplot(cor_chart, aes(x=symbol, y=correlation))+ 
+  geom_segment(aes(x=symbol, xend=symbol, y=0, yend=correlation))+
+  geom_point(aes(size=-log10(p.value)))+
+  title(main = "Correlation of CTD-PAH DEGs with microvascular endothelial cells")
+```
+
+```{r}
+corsig_CTDPAH <- cor_CTDPAH_mvEndothelialcells %>%
+  filter(p.value < 0.07) %>%
+  select(symbol)
+corsig_CTDPAH <- as.array(t(corsig_CTDPAH))
+corsig_CTDPAH <- intersect(corsig_CTDPAH, deginmod_CTDPAH_pink)
+corsig_CTDPAH
+
+```
+
+```{r}
+corsig_IPAH <- cor_IPAH_CD8Tem %>%
+  filter(p.value < 0.07) %>%
+  select(symbol)
+corsig_IPAH <- as.array(t(corsig_IPAH))
+corsig_IPAH <- intersect(corsig_IPAH, deginmod_IPAH_greenyellow)
+corsig_IPAH
+```
+
+KEGG for modules
+
+```{r}
+KEGG <- KEGG_greenyellow %>%
+  filter(Category == "KEGG_PATHWAY")
+KEGG$Term <- sapply(KEGG$Term, 
+                    function(x) str_split_fixed(x, pattern = ":", n=2)[2])
+KEGG <- KEGG[1:10,] %>%
+  arrange(Benjamini) 
+KEGG$GeneRatio <- KEGG$Count/KEGG$List.Total
+
+```
+
+```{r}
+ggplot(KEGG,aes(x=GeneRatio, y=Term, size=Count,color=-log10(Benjamini)))+ # Modify here
+  geom_point()+
+  scale_color_gradient(low = "blue",high = "red")+
+  labs(y = "Terms",color = "-log10(Padj)")+
+  theme_bw()+
+  ggtitle("KEGG Pathways of Greenyellow Module") # Modify here
+```
